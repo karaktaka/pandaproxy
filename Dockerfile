@@ -1,7 +1,7 @@
 # PandaProxy - BambuLab Camera Fan-Out Proxy
 # Multi-stage build for minimal image size
 
-FROM python:3.14-alpine AS builder
+FROM python:3.13-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -24,7 +24,7 @@ RUN uv pip install --system --no-cache .
 
 
 # Final stage
-FROM python:3.14-alpine
+FROM python:3.13-alpine
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -47,7 +47,7 @@ RUN case "${TARGETARCH}" in \
     chmod +x /usr/local/bin/mediamtx
 
 # Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin/pandaproxy /usr/local/bin/pandaproxy
 
 # Create non-root user
@@ -60,10 +60,17 @@ WORKDIR /home/pandaproxy
 # Environment variables (can be overridden)
 ENV PRINTER_IP=""
 ENV ACCESS_CODE=""
+ENV SERIAL_NUMBER=""
 ENV BIND_ADDRESS="0.0.0.0"
+ENV SERVICES=""
+ENV ENABLE_ALL=""
 
 # Expose ports
-EXPOSE 322 6000
+# 322: RTSP camera (X1/H2/P2)
+# 6000: Chamber image (A1/P1)
+# 8883: MQTT (printer control/status)
+# 990: FTP (file uploads)
+EXPOSE 322 6000 8883 990
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \

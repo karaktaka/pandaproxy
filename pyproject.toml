@@ -1,10 +1,12 @@
 [project]
 name = "PandaProxy"
 version = "0.1.0"
-description = "BambuLab Camera Fan-Out Proxy - Proxy camera streams to multiple clients"
-requires-python = ">=3.14"
+description = "BambuLab Multi-Service Proxy - Proxy camera and MQTT from BambuLab printers"
+requires-python = ">=3.13"
 dependencies = [
-    "typer>=0.21.1",
+    "aiomqtt>=2.5.0",
+    "amqtt>=0.11.0",
+    "typer==0.15.4",
 ]
 
 [project.scripts]
@@ -27,7 +29,7 @@ packages = ["src/pandaproxy"]
 include = ["src/pandaproxy/*.cer"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py313"
 line-length = 100
 src = ["src"]
 

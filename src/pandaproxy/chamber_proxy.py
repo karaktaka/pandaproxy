@@ -211,7 +211,7 @@ class ChamberImageProxy:
                     try:
                         writer.write(data)
                         await writer.drain()
-                    except ConnectionResetError, BrokenPipeError:
+                    except (ConnectionResetError, BrokenPipeError):
                         break
             finally:
                 await self._fanout.unregister_client(client)

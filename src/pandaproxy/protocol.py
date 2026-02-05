@@ -1,6 +1,6 @@
-"""BambuLab camera protocol constants and utilities.
+"""BambuLab protocol constants and utilities.
 
-Shared utilities for both chamber image proxy and detection modules.
+Shared utilities for camera proxies, MQTT proxy, and detection modules.
 """
 
 import asyncio
@@ -11,6 +11,8 @@ import struct
 # Protocol ports
 RTSP_PORT = 322
 CHAMBER_PORT = 6000
+MQTT_PORT = 8883
+
 
 # Chamber image protocol constants
 AUTH_MAGIC = 0x40
@@ -75,7 +77,7 @@ def parse_auth_payload(data: bytes) -> str | None:
 
         # Strip null padding from access code
         return access_code.rstrip(b"\x00").decode("utf-8")
-    except struct.error, UnicodeDecodeError:
+    except (struct.error, UnicodeDecodeError):
         return None
 
 

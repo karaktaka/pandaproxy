@@ -6,12 +6,19 @@ services:
     environment:
       - PRINTER_IP=${PRINTER_IP:?PRINTER_IP is required}
       - ACCESS_CODE=${ACCESS_CODE:?ACCESS_CODE is required}
+      - SERIAL_NUMBER=${SERIAL_NUMBER:?SERIAL_NUMBER is required}
       - BIND_ADDRESS=0.0.0.0
+      - SERVICES=${SERVICES:-camera}
+      - ENABLE_ALL=${ENABLE_ALL:-}
     ports:
       # Chamber image stream (A1/P1 printers)
       - "6000:6000"
       # RTSP camera stream (X1/H2/P2 printers)
       - "322:322"
+      # MQTT (printer control and status)
+      - "8883:8883"
+      # FTP (file uploads)
+      - "990:990"
     # Allow binding to privileged ports
     cap_add:
       - NET_BIND_SERVICE
