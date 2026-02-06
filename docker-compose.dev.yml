@@ -1,0 +1,19 @@
+services:
+  pandaproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pandaproxy_dev:latest
+    container_name: pandaproxy_dev
+    env_file: .env
+    ports:
+      # Chamber image stream (A1/P1 printers)
+      - "6000:6000"
+      # RTSP camera stream (X1/H2/P2 printers)
+      - "322:322"
+      # MQTT (printer control and status)
+      - "8883:8883"
+      # FTP (file uploads)
+      - "990:990"
+    cap_add:
+      - NET_BIND_SERVICE
