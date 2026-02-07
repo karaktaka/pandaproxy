@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./certs:/home/pandaproxy/certs
+      - ./certs:/app/certs
     networks:
       pub_net:
         # Assign a static IP from your network that is not used by DHCP
