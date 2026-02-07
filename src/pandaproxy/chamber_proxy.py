@@ -61,12 +61,6 @@ class ChamberImageProxy:
         logger.info("Starting chamber image proxy on %s:%d", self.bind_address, self.port)
         self._running = True
 
-        # Start upstream connection manager
-        self._upstream_task = asyncio.create_task(self._upstream_connection_loop())
-
-        # Start TLS server to accept clients
-        # We need to generate a self-signed cert for the server side
-
         # Generate persistent certs for Chamber
         certs_dir = Path("certs")
         certs_dir.mkdir(exist_ok=True)
@@ -109,6 +103,14 @@ class ChamberImageProxy:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+
+    async def run_upstream_loop(self) -> None:
+        """Run the upstream connection loop as a standalone coroutine."""
+        self._upstream_task = asyncio.create_task(self._upstream_connection_loop())
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._upstream_task
+        logger.debug("Upstream task stopped.")
+
 
     async def _upstream_connection_loop(self) -> None:
         """Maintain connection to printer chamber image stream, reconnecting on failure."""

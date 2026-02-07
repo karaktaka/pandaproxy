@@ -79,6 +79,7 @@ async def run_proxy(
     rtsp_proxy: RTSPProxy | None = None
     mqtt_proxy: MQTTProxy | None = None
     ftp_proxy: FTPProxy | None = None
+    background_tasks = []
 
     # Setup signal handlers for graceful shutdown
     stop_event = asyncio.Event()
@@ -93,7 +94,10 @@ async def run_proxy(
         loop.add_signal_handler(sig, signal_handler)
 
     try:
-        # Start camera proxy if enabled
+        # Instantiate proxies and collect start tasks
+        start_tasks = []
+
+        # Instantiate camera proxy if enabled
         if "camera" in services and camera_type:
             if camera_type == "chamber":
                 chamber_proxy = ChamberImageProxy(
@@ -101,16 +105,20 @@ async def run_proxy(
                     access_code=access_code,
                     bind_address=bind,
                 )
-                await chamber_proxy.start()
+                start_tasks.append(chamber_proxy.start())
+                # Run its upstream loop in the background
+                background_tasks.append(asyncio.create_task(chamber_proxy.run_upstream_loop()))
             elif camera_type == "rtsp":
                 rtsp_proxy = RTSPProxy(
                     printer_ip=printer_ip,
                     access_code=access_code,
                     bind_address=bind,
                 )
-                await rtsp_proxy.start()
+                start_tasks.append(rtsp_proxy.start())
+                # Run its monitor loop in the background
+                background_tasks.append(asyncio.create_task(rtsp_proxy.run_monitor_loop()))
 
-        # Start MQTT proxy if enabled
+        # Instantiate MQTT proxy if enabled
         if "mqtt" in services:
             mqtt_proxy = MQTTProxy(
                 printer_ip=printer_ip,
@@ -118,16 +126,20 @@ async def run_proxy(
                 serial_number=serial_number,
                 bind_address=bind,
             )
-            await mqtt_proxy.start()
+            start_tasks.append(mqtt_proxy.start())
 
-        # Start FTP proxy if enabled
+        # Instantiate FTP proxy if enabled
         if "ftp" in services:
             ftp_proxy = FTPProxy(
                 printer_ip=printer_ip,
                 access_code=access_code,
                 bind_address=bind,
             )
-            await ftp_proxy.start()
+            start_tasks.append(ftp_proxy.start())
+
+        # Start all services concurrently
+        if start_tasks:
+            await asyncio.gather(*start_tasks)
 
         # Print startup banner
         typer.echo("\n" + "=" * 60)
@@ -160,17 +172,26 @@ async def run_proxy(
     finally:
         logger.info("Shutting down...")
 
+        # Cancel background tasks
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+
+        # Create a list of stop coroutines from the proxies that were started
+        stop_tasks = []
         if chamber_proxy:
-            await chamber_proxy.stop()
-
+            stop_tasks.append(chamber_proxy.stop())
         if rtsp_proxy:
-            await rtsp_proxy.stop()
-
+            stop_tasks.append(rtsp_proxy.stop())
         if mqtt_proxy:
-            await mqtt_proxy.stop()
-
+            stop_tasks.append(mqtt_proxy.stop())
         if ftp_proxy:
-            await ftp_proxy.stop()
+            stop_tasks.append(ftp_proxy.stop())
+
+        # Stop all services concurrently
+        if stop_tasks:
+            await asyncio.gather(*stop_tasks)
 
         logger.info("Shutdown complete")
 

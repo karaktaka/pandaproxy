@@ -73,10 +73,6 @@ class MQTTProxy:
 
         logger.info("MQTT proxy started on %s:%d (TLS)", self.bind_address, self.port)
 
-        # Keep the server running
-        async with self._server:
-            await self._server.serve_forever()
-
     async def stop(self) -> None:
         """Stop the MQTT proxy."""
         logger.info("Stopping MQTT proxy")

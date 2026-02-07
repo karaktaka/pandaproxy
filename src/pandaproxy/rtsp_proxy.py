@@ -131,9 +131,6 @@ class RTSPProxy:
         # Start FFmpeg to pull from printer and push to MediaMTX
         await self._start_ffmpeg()
 
-        # Start monitoring task
-        self._monitor_task = asyncio.create_task(self._monitor_processes())
-
         logger.info("RTSP proxy running on rtsp://%s:%d/stream", self.bind_address, self.port)
 
     async def stop(self) -> None:
@@ -173,6 +170,13 @@ class RTSPProxy:
             self._config_path = None
 
         logger.info("RTSP proxy stopped")
+
+    async def run_monitor_loop(self) -> None:
+        """Run the process monitoring loop as a standalone coroutine."""
+        self._monitor_task = asyncio.create_task(self._monitor_processes())
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._monitor_task  # Expected on shutdown
+        logger.debug("Monitor task stopped.")
 
     async def _create_mediamtx_config(self) -> Path:
         """Create MediaMTX configuration file."""
