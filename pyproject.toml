@@ -5,7 +5,7 @@ description = "BambuLab Multi-Service Proxy - Proxy camera, MQTT, and FTP from B
 requires-python = ">=3.13"
 dependencies = [
     "aiomqtt>=2.5.0",
-    "typer>=0.15.4",
+    "typer>=0.21.1",
     "cryptography>=41.0.0",
     "ffmpeg-python>=0.2.0",
 ]

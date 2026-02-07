@@ -244,22 +244,18 @@ def main(
     preventing connection limit issues. It can proxy camera streams, MQTT
     (for printer control/status), and FTP (for file uploads).
 
-    \b
     Services:
     - camera: Auto-detected (Chamber Image for A1/P1, RTSP for X1/H2/P2)
     - mqtt: MQTTS on port 8883 for printer control and status
     - ftp: Implicit FTPS on port 990 for file uploads
 
-    \b
     Examples:
         # Camera only (default)
         pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001
 
-    \b
         # All services
         pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 --enable-all
 
-    \b
         # Specific services
         pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 --services camera,mqtt
     """
