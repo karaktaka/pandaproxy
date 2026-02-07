@@ -6,6 +6,7 @@ Shared utilities for camera proxies, MQTT proxy, FTP proxy, and detection module
 import asyncio
 import contextlib
 import datetime
+import ipaddress
 import os
 import ssl
 import struct
@@ -136,16 +137,7 @@ def generate_self_signed_cert(
         sans.extend(x509.DNSName(dns) for dns in san_dns)
     if san_ips:
         for ip in san_ips:
-            # Simple IP parsing (could be improved with ipaddress module)
-            if ":" in ip:  # IPv6
-                # Minimal IPv6 parsing for ::1
-                if ip == "::1":
-                    packed = b"\x00" * 15 + b"\x01"
-                    sans.append(x509.IPAddress(type("IPv6Address", (), {"packed": packed})()))
-            else:  # IPv4
-                parts = [int(p) for p in ip.split(".")]
-                packed = bytes(parts)
-                sans.append(x509.IPAddress(type("IPv4Address", (), {"packed": packed})()))
+            sans.append(x509.IPAddress(ipaddress.ip_address(ip)))
 
     if not sans:
         # Default to localhost if no SANs provided
