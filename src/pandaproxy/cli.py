@@ -66,6 +66,26 @@ def parse_services(services_str: str | None, enable_all: bool) -> set[str]:
     return services
 
 
+def is_running_in_docker() -> bool:
+    """Check if the application is running inside a Docker container."""
+    # Check for the existence of .dockerenv file
+    if os.path.exists("/.dockerenv"):
+        return True
+
+    # Check for RUNNING_IN_DOCKER environment variable (used in our Dockerfile)
+    if os.environ.get("RUNNING_IN_DOCKER"):
+        return True
+
+    # Check cgroup for "docker" string on Linux
+    try:
+        with open("/proc/1/cgroup", "rt") as f:
+            return "docker" in f.read()
+    except FileNotFoundError:
+        pass  # File doesn't exist, not a Linux-based container
+
+    return False
+
+
 async def run_proxy(
     printer_ip: str,
     access_code: str,
@@ -163,7 +183,7 @@ async def run_proxy(
             typer.echo(f"  FTP: ftps://{bind}:990 (implicit TLS, active mode only)")
 
         typer.echo("=" * 60)
-        if not (os.path.exists("/.dockerenv") or os.environ.get("RUNNING_IN_DOCKER")):
+        if not is_running_in_docker():
             typer.echo("Press Ctrl+C to stop\n")
 
         # Wait for shutdown signal
