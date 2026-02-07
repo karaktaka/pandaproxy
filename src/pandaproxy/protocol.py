@@ -5,8 +5,17 @@ Shared utilities for camera proxies, MQTT proxy, FTP proxy, and detection module
 
 import asyncio
 import contextlib
+import datetime
+import os
 import ssl
 import struct
+import tempfile
+from pathlib import Path
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 # Protocol ports
 RTSP_PORT = 322
@@ -82,47 +91,110 @@ def parse_auth_payload(data: bytes) -> str | None:
         return None
 
 
-def create_server_ssl_context() -> ssl.SSLContext:
-    """Create SSL context for server side with self-signed cert."""
-    import os
-    import subprocess
-    import tempfile
+def generate_self_signed_cert(
+    common_name: str = "PandaProxy",
+    san_dns: list[str] | None = None,
+    san_ips: list[str] | None = None,
+) -> tuple[Path, Path]:
+    """Generate a self-signed certificate and key.
 
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    Args:
+        common_name: Common Name (CN) for the certificate
+        san_dns: List of DNS names for Subject Alternative Name (SAN)
+        san_ips: List of IP addresses for Subject Alternative Name (SAN)
 
-    # Create temporary files for cert and key
-    cert_fd, cert_path = tempfile.mkstemp(suffix=".pem")
-    key_fd, key_path = tempfile.mkstemp(suffix=".pem")
+    Returns:
+        Tuple of (cert_path, key_path) pointing to temporary files.
+        The caller is responsible for cleaning up these files.
+    """
+    # Generate key
+    key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+
+    # Generate self-signed certificate
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+        ]
+    )
+
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.now(datetime.UTC))
+        .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365))
+    )
+
+    # Add SANs if provided
+    sans: list[x509.GeneralName] = []
+    if san_dns:
+        sans.extend(x509.DNSName(dns) for dns in san_dns)
+    if san_ips:
+        for ip in san_ips:
+            # Simple IP parsing (could be improved with ipaddress module)
+            if ":" in ip:  # IPv6
+                # Minimal IPv6 parsing for ::1
+                if ip == "::1":
+                    packed = b"\x00" * 15 + b"\x01"
+                    sans.append(x509.IPAddress(type("IPv6Address", (), {"packed": packed})()))
+            else:  # IPv4
+                parts = [int(p) for p in ip.split(".")]
+                packed = bytes(parts)
+                sans.append(x509.IPAddress(type("IPv4Address", (), {"packed": packed})()))
+
+    if not sans:
+        # Default to localhost if no SANs provided
+        sans.append(x509.DNSName("localhost"))
+
+    builder = builder.add_extension(
+        x509.SubjectAlternativeName(sans),
+        critical=False,
+    )
+
+    cert = builder.sign(key, hashes.SHA256())
+
+    # Write to temp files
+    cert_fd, cert_path = tempfile.mkstemp(suffix=".pem", prefix="cert_")
+    key_fd, key_path = tempfile.mkstemp(suffix=".pem", prefix="key_")
     os.close(cert_fd)
     os.close(key_fd)
 
-    try:
-        # Generate self-signed certificate
-        subprocess.run(
-            [
-                "openssl",
-                "req",
-                "-x509",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                key_path,
-                "-out",
-                cert_path,
-                "-days",
-                "365",
-                "-nodes",
-                "-subj",
-                "/CN=PandaProxy",
-            ],
-            check=True,
-            capture_output=True,
+    with open(key_path, "wb") as f:
+        f.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
         )
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
 
+    return Path(cert_path), Path(key_path)
+
+
+def create_server_ssl_context() -> ssl.SSLContext:
+    """Create SSL context for server side with self-signed cert."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    cert_path, key_path = generate_self_signed_cert(
+        common_name="PandaProxy",
+        san_dns=["localhost"],
+    )
+
+    try:
         ctx.load_cert_chain(cert_path, key_path)
     finally:
-        os.unlink(cert_path)
-        os.unlink(key_path)
+        # Clean up temp files immediately as they are loaded into memory
+        if cert_path.exists():
+            cert_path.unlink()
+        if key_path.exists():
+            key_path.unlink()
 
     return ctx
 

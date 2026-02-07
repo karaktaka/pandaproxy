@@ -206,10 +206,10 @@ lftp -u bblp,12345678 ftps://192.168.1.50:990
    - Chamber Image: Pure Python asyncio TLS proxy with fan-out
    - RTSP: FFmpeg pulls from printer, MediaMTX serves clients
 
-2. **MQTT Proxy**: Uses amqtt broker with bridge to printer
-   - Runs local MQTT broker accepting client connections with TLS
-   - Bridges messages bidirectionally to printer's MQTT broker
-   - Transparent keepalive and message forwarding
+2. **MQTT Proxy**: Uses TCP proxy with TLS termination
+   - Accepts client connections with TLS
+   - Forwards traffic bidirectionally to printer's MQTT broker
+   - Transparently handles MQTT traffic
 
 3. **FTP Proxy**: Pure Python asyncio FTPS proxy
    - Accepts implicit TLS connections

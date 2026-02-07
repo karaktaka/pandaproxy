@@ -35,22 +35,11 @@ def check_dependencies(services: set[str], camera_type: str | None) -> tuple[boo
     missing = []
 
     # Camera service dependencies
-    if "camera" in services:
-        if camera_type == "rtsp":
-            if not shutil.which("ffmpeg"):
-                missing.append("ffmpeg")
-            if not shutil.which("mediamtx"):
-                missing.append("mediamtx")
-        elif camera_type == "chamber" and not shutil.which("openssl"):
-            missing.append("openssl")
-
-    # MQTT and FTP proxies need openssl for TLS cert generation
-    if (
-        ("mqtt" in services or "ftp" in services)
-        and not shutil.which("openssl")
-        and "openssl" not in missing
-    ):
-        missing.append("openssl")
+    if "camera" in services and camera_type == "rtsp":
+        if not shutil.which("ffmpeg"):
+            missing.append("ffmpeg")
+        if not shutil.which("mediamtx"):
+            missing.append("mediamtx")
 
     return len(missing) == 0, missing
 
@@ -313,10 +302,6 @@ def main(
                     "  - mediamtx: Download from https://github.com/bluenviron/mediamtx/releases",
                     err=True,
                 )
-            elif dep == "openssl":
-                typer.echo("  - openssl: Install via your package manager", err=True)
-                typer.echo("      Linux: apt install openssl / pacman -S openssl", err=True)
-                typer.echo("      macOS: brew install openssl", err=True)
         raise typer.Exit(1)
 
     if not enabled_services:
