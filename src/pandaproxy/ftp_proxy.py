@@ -15,6 +15,7 @@ import contextlib
 import logging
 import re
 import ssl
+from importlib.resources import files
 from pathlib import Path
 
 from pandaproxy.helper import (
@@ -27,6 +28,25 @@ logger = logging.getLogger(__name__)
 
 # FTP response timeout (seconds)
 FTP_TIMEOUT = 60.0
+
+
+class SessionReusingSSLContext(ssl.SSLContext):
+    """SSLContext that forces session reuse from a provided session."""
+
+    def __init__(self, protocol, session=None):
+        super().__init__(protocol)
+        self._session = session
+
+    def wrap_bio(self, incoming, outgoing, server_side=False, server_hostname=None, session=None):
+        if self._session and session is None:
+            session = self._session
+        return super().wrap_bio(
+            incoming,
+            outgoing,
+            server_side=server_side,
+            server_hostname=server_hostname,
+            session=session,
+        )
 
 
 class FTPProxy:
@@ -126,6 +146,10 @@ class FTPProxy:
             )
             logger.debug("Connected to printer FTP")
 
+            # Extract SSL session for reuse
+            control_ssl_obj = upstream_writer.get_extra_info("ssl_object")
+            control_session = control_ssl_obj.session if control_ssl_obj else None
+
             # --- Data Connection Helper ---
             async def handle_data_connection(
                 target_ip: str,
@@ -139,8 +163,25 @@ class FTPProxy:
 
                 target_w: asyncio.StreamWriter | None = None
                 try:
+                    # Prepare SSL context for data connection
+                    # If we have a control session, try to reuse it
+                    ctx = self._ssl_context
+                    if control_session:
+                        try:
+                            ctx = SessionReusingSSLContext(
+                                ssl.PROTOCOL_TLS_CLIENT, session=control_session
+                            )
+                            ctx.check_hostname = False
+                            ctx.verify_mode = ssl.CERT_REQUIRED
+                            cert_path = files("pandaproxy").joinpath("printer.cer")
+                            ctx.load_verify_locations(str(cert_path))
+                            logger.debug("Using session reuse for data connection")
+                        except Exception as e:
+                            logger.warning("Failed to setup session reuse: %s", e)
+                            ctx = self._ssl_context
+
                     target_r, target_w = await asyncio.open_connection(
-                        target_ip, target_port, ssl=self._ssl_context
+                        target_ip, target_port, ssl=ctx
                     )
 
                     async def fwd(src, dst):

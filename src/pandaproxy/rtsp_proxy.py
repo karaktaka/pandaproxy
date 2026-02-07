@@ -15,8 +15,6 @@ from pathlib import Path
 
 import ffmpeg
 
-from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME
-
 logger = logging.getLogger(__name__)
 
 # MediaMTX configuration template

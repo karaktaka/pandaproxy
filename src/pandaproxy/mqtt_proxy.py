@@ -13,11 +13,11 @@ Protocol details:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import ssl
 from pathlib import Path
 
+from pandaproxy.helper import close_writer
 from pandaproxy.protocol import MQTT_PORT
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,7 @@ class MQTTProxy:
         peer_addr = writer.get_extra_info("peername")
         logger.info("New MQTT connection from %s", peer_addr)
 
+        printer_writer = None
         try:
             # Connect to the printer
             printer_reader, printer_writer = await self._connect_to_printer()
@@ -117,11 +118,15 @@ class MQTTProxy:
             for task in pending:
                 task.cancel()
 
+            # Wait for cancelled tasks to finish cleaning up
+            await asyncio.gather(*pending, return_exceptions=True)
+
         except Exception as e:
             logger.error("Error handling client %s: %s", peer_addr, e)
         finally:
-            writer.close()
-            await writer.wait_closed()
+            await close_writer(writer)
+            if printer_writer:
+                await close_writer(printer_writer)
             logger.info("Connection from %s closed", peer_addr)
 
     async def _connect_to_printer(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -156,8 +161,7 @@ class MQTTProxy:
         except Exception as e:
             logger.debug("Error forwarding %s: %s", direction, e)
         finally:
-            with contextlib.suppress(Exception):
-                writer.close()
+            await close_writer(writer)
 
     @staticmethod
     def _get_ca_file() -> str:
