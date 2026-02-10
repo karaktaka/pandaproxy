@@ -4,8 +4,20 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths:
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - ".github/workflows/docker.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - ".github/workflows/docker.yml"
 
 env:
   REGISTRY: ghcr.io
