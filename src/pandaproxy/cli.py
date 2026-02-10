@@ -137,9 +137,6 @@ async def run_proxy(
                 output_key=key_path,
             )
 
-        # Instantiate proxies and collect start tasks
-        start_tasks = []
-
         # Instantiate camera proxy if enabled
         if "camera" in services and camera_type:
             if camera_type == "chamber":
@@ -150,9 +147,6 @@ async def run_proxy(
                     key_path=key_path,
                     bind_address=bind,
                 )
-                start_tasks.append(chamber_proxy.start())
-                # Run its upstream loop in the background
-                background_tasks.append(asyncio.create_task(chamber_proxy.run_upstream_loop()))
             elif camera_type == "rtsp":
                 rtsp_proxy = RTSPProxy(
                     printer_ip=printer_ip,
@@ -161,9 +155,6 @@ async def run_proxy(
                     key_path=key_path,
                     bind_address=bind,
                 )
-                start_tasks.append(rtsp_proxy.start())
-                # Run its monitor loop in the background
-                background_tasks.append(asyncio.create_task(rtsp_proxy.run_monitor_loop()))
 
         # Instantiate MQTT proxy if enabled
         if "mqtt" in services:
@@ -175,7 +166,6 @@ async def run_proxy(
                 key_path=key_path,
                 bind_address=bind,
             )
-            start_tasks.append(mqtt_proxy.start())
 
         # Instantiate FTP proxy if enabled
         if "ftp" in services:
@@ -186,11 +176,28 @@ async def run_proxy(
                 key_path=key_path,
                 bind_address=bind,
             )
-            start_tasks.append(ftp_proxy.start())
 
         # Start all services concurrently
+        # Collect start coroutines from instantiated proxies
+        start_tasks = []
+        if chamber_proxy:
+            start_tasks.append(chamber_proxy.start())
+        if rtsp_proxy:
+            start_tasks.append(rtsp_proxy.start())
+        if mqtt_proxy:
+            start_tasks.append(mqtt_proxy.start())
+        if ftp_proxy:
+            start_tasks.append(ftp_proxy.start())
+
         if start_tasks:
             await asyncio.gather(*start_tasks)
+
+        # IMPORTANT: Background tasks must be created AFTER start() completes
+        # because they depend on _running being True (set in start())
+        if chamber_proxy:
+            background_tasks.append(asyncio.create_task(chamber_proxy.run_upstream_loop()))
+        if rtsp_proxy:
+            background_tasks.append(asyncio.create_task(rtsp_proxy.run_monitor_loop()))
 
         # Print startup banner
         typer.echo("\n" + "=" * 60)

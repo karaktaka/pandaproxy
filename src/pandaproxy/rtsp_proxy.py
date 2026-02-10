@@ -320,4 +320,3 @@ class RTSPProxy:
                     logger.info("Restarting FFmpeg in 5 seconds...")
                     await asyncio.sleep(5)
                     await self._start_ffmpeg()
-                    await self._start_ffmpeg()
