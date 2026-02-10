@@ -10,9 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Get version from tag
         id: get_version
@@ -22,14 +25,15 @@ jobs:
         run: |
           sed -i "s/badge\/Version-.*-green/badge\/Version-${{ env.VERSION }}-green/" README.md
 
-      - name: Commit and push changes
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add README.md
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "docs: Update release badge to version ${{ env.VERSION }}"
-            git push
-          fi
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "docs: Update release badge to version ${{ env.VERSION }}"
+          title: "docs: Update release badge to version ${{ env.VERSION }}"
+          body: |
+            Automated PR to update the version badge in README.md to `${{ env.VERSION }}`.
+
+            Triggered by tag: `${{ github.ref_name }}`
+          branch: docs/update-badge-${{ env.VERSION }}
+          delete-branch: true
+          labels: documentation,automated
