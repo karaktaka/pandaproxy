@@ -61,7 +61,7 @@ RUN adduser -D -u 1000 pandaproxy
 USER pandaproxy
 
 # Set working directory
-WORKDIR /home/pandaproxy
+WORKDIR /app
 
 # Environment variables (can be overridden)
 ENV PRINTER_IP=""

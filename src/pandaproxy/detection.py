@@ -8,14 +8,12 @@ import asyncio
 import logging
 import struct
 
-from pandaproxy.protocol import (
-    CHAMBER_PORT,
-    MAX_PAYLOAD_SIZE,
-    RTSP_PORT,
+from pandaproxy.helper import (
     close_writer,
     create_auth_payload,
     create_ssl_context,
 )
+from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE, RTSP_PORT
 
 logger = logging.getLogger(__name__)
 

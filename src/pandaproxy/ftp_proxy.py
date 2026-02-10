@@ -12,21 +12,70 @@ Protocol details:
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import re
 import ssl
+from importlib.resources import files
+from pathlib import Path
 
-from pandaproxy.protocol import (
-    FTP_PORT,
+from pandaproxy.helper import (
     close_writer,
-    create_server_ssl_context,
-    create_ssl_context,
 )
+from pandaproxy.protocol import FTP_PORT
 
 logger = logging.getLogger(__name__)
 
 # FTP response timeout (seconds)
 FTP_TIMEOUT = 60.0
+
+ssl_session_context: contextvars.ContextVar[ssl.SSLSession | None] = contextvars.ContextVar(
+    "ssl_session", default=None
+)
+
+
+class SessionReusingSSLContext(ssl.SSLContext):
+    """SSLContext that forces session reuse from a provided session.
+
+    Overrides both wrap_socket() and wrap_bio() to inject the session
+    from the context variable. This is needed because asyncio uses
+    wrap_socket() internally, not wrap_bio().
+    """
+
+    def wrap_socket(
+        self,
+        sock,
+        server_side=False,
+        do_handshake_on_connect=True,
+        suppress_ragged_eofs=True,
+        server_hostname=None,
+        session=None,
+    ):
+        ctx_session = ssl_session_context.get()
+        if ctx_session and session is None:
+            session = ctx_session
+            logger.debug("Injecting SSL session for reuse in wrap_socket")
+        return super().wrap_socket(
+            sock,
+            server_side=server_side,
+            do_handshake_on_connect=do_handshake_on_connect,
+            suppress_ragged_eofs=suppress_ragged_eofs,
+            server_hostname=server_hostname,
+            session=session,
+        )
+
+    def wrap_bio(self, incoming, outgoing, server_side=False, server_hostname=None, session=None):
+        ctx_session = ssl_session_context.get()
+        if ctx_session and session is None:
+            session = ctx_session
+            logger.debug("Injecting SSL session for reuse in wrap_bio")
+        return super().wrap_bio(
+            incoming,
+            outgoing,
+            server_side=server_side,
+            server_hostname=server_hostname,
+            session=session,
+        )
 
 
 class FTPProxy:
@@ -39,10 +88,14 @@ class FTPProxy:
         self,
         printer_ip: str,
         access_code: str,
+        cert_path: Path,
+        key_path: Path,
         bind_address: str = "0.0.0.0",
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
+        self.cert_path = cert_path
+        self.key_path = key_path
         self.bind_address = bind_address
         self.port = FTP_PORT
 
@@ -64,8 +117,20 @@ class FTPProxy:
         self._running = True
 
         # Initialize SSL contexts
-        self._ssl_context = create_ssl_context()
-        self._server_ssl_context = create_server_ssl_context()
+        self._ssl_context = SessionReusingSSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self._ssl_context.check_hostname = False
+        self._ssl_context.verify_mode = ssl.CERT_REQUIRED
+        cert_path = files("pandaproxy").joinpath("printer.cer")
+        self._ssl_context.load_verify_locations(str(cert_path))
+
+        if not self.cert_path.exists() or not self.key_path.exists():
+            raise FileNotFoundError(
+                f"TLS certificates not found at {self.cert_path} or {self.key_path}. "
+                "Please ensure the CLI entry point has generated them."
+            )
+
+        self._server_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self._server_ssl_context.load_cert_chain(self.cert_path, self.key_path)
 
         self._server = await asyncio.start_server(
             self._handle_client,
@@ -114,6 +179,10 @@ class FTPProxy:
             )
             logger.debug("Connected to printer FTP")
 
+            # Extract SSL session for reuse
+            control_ssl_obj = upstream_writer.get_extra_info("ssl_object")
+            control_session = control_ssl_obj.session if control_ssl_obj else None
+
             # --- Data Connection Helper ---
             async def handle_data_connection(
                 target_ip: str,
@@ -127,9 +196,22 @@ class FTPProxy:
 
                 target_w: asyncio.StreamWriter | None = None
                 try:
-                    target_r, target_w = await asyncio.open_connection(
-                        target_ip, target_port, ssl=self._ssl_context
-                    )
+                    # Prepare SSL context for data connection
+                    # If we have a control session, try to reuse it
+                    ctx = self._ssl_context
+                    token = None
+                    if control_session:
+                        token = ssl_session_context.set(control_session)
+                        logger.debug("Using session reuse for data connection")
+
+                    try:
+                        target_r, target_w = await asyncio.open_connection(
+                            target_ip, target_port, ssl=ctx
+                        )
+                        logger.debug("Connected to printer data port")
+                    finally:
+                        if token:
+                            ssl_session_context.reset(token)
 
                     async def fwd(src, dst):
                         with contextlib.suppress(Exception):
@@ -145,8 +227,8 @@ class FTPProxy:
                     await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
                     t1.cancel()
                     t2.cancel()
-                except Exception as e:
-                    logger.error("Data proxy error: %s", e)
+                except Exception as exc:
+                    logger.error("Data proxy error: %s", exc)
                 finally:
                     await close_writer(w)
                     if target_w:
@@ -172,12 +254,19 @@ class FTPProxy:
                             if cmd_str:
                                 logger.debug("C->P: %s", self._mask_password(cmd_str))
 
+                            # Block EPSV command to force PASV
+                            if cmd_str.upper().startswith("EPSV"):
+                                logger.info("Blocking EPSV command from client")
+                                client_writer.write(b"502 Command not implemented\r\n")
+                                await client_writer.drain()
+                                continue
+
                         upstream_writer.write(line)
                         await upstream_writer.drain()
                 except asyncio.CancelledError:
                     pass
-                except Exception as e:
-                    logger.error("Error forwarding C->P: %s", e)
+                except Exception as exc:
+                    logger.error("Error forwarding C->P: %s", exc)
 
             async def forward_printer_to_client():
                 """Forward responses from printer to client, rewriting PASV."""
@@ -235,15 +324,15 @@ class FTPProxy:
                                         new_resp = f"{prefix}{new_args}{suffix}"
                                         logger.info("Rewrote PASV: %s -> %s", resp_str, new_resp)
                                         line = (new_resp + "\r\n").encode("utf-8")
-                        except Exception as e:
-                            logger.error("Error parsing PASV: %s", e)
+                        except Exception as exc:
+                            logger.error("Error parsing PASV: %s", exc)
 
                         client_writer.write(line)
                         await client_writer.drain()
                 except asyncio.CancelledError:
                     pass
-                except Exception as e:
-                    logger.error("Error forwarding P->C: %s", e)
+                except Exception as exc:
+                    logger.error("Error forwarding P->C: %s", exc)
 
             # Start tasks
             task1 = asyncio.create_task(forward_client_to_printer(), name=f"ftp_c2p_{client_id}")

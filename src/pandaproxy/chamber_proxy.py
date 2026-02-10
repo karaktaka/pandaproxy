@@ -13,18 +13,18 @@ Protocol details:
 import asyncio
 import contextlib
 import logging
+import ssl
 import struct
+from pathlib import Path
 
 from pandaproxy.fanout import StreamFanout
-from pandaproxy.protocol import (
-    CHAMBER_PORT,
-    MAX_PAYLOAD_SIZE,
+from pandaproxy.helper import (
     close_writer,
     create_auth_payload,
-    create_server_ssl_context,
     create_ssl_context,
     parse_auth_payload,
 )
+from pandaproxy.protocol import CHAMBER_PORT, MAX_PAYLOAD_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +40,14 @@ class ChamberImageProxy:
         self,
         printer_ip: str,
         access_code: str,
+        cert_path: Path,
+        key_path: Path,
         bind_address: str = "0.0.0.0",
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
+        self.cert_path = cert_path
+        self.key_path = key_path
         self.bind_address = bind_address
         self.port = CHAMBER_PORT
 
@@ -59,12 +63,14 @@ class ChamberImageProxy:
         logger.info("Starting chamber image proxy on %s:%d", self.bind_address, self.port)
         self._running = True
 
-        # Start upstream connection manager
-        self._upstream_task = asyncio.create_task(self._upstream_connection_loop())
+        if not self.cert_path.exists() or not self.key_path.exists():
+            raise FileNotFoundError(
+                f"TLS certificates not found at {self.cert_path} or {self.key_path}. "
+                "Please ensure the CLI entry point has generated them."
+            )
 
-        # Start TLS server to accept clients
-        # We need to generate a self-signed cert for the server side
-        server_ssl = create_server_ssl_context()
+        server_ssl = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_ssl.load_cert_chain(self.cert_path, self.key_path)
 
         self._server = await asyncio.start_server(
             self._handle_client,
@@ -88,6 +94,13 @@ class ChamberImageProxy:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+
+    async def run_upstream_loop(self) -> None:
+        """Run the upstream connection loop as a standalone coroutine."""
+        self._upstream_task = asyncio.create_task(self._upstream_connection_loop())
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._upstream_task
+        logger.debug("Upstream task stopped.")
 
     async def _upstream_connection_loop(self) -> None:
         """Maintain connection to printer chamber image stream, reconnecting on failure."""

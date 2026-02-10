@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import signal
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -12,7 +13,9 @@ import typer
 from pandaproxy.chamber_proxy import ChamberImageProxy
 from pandaproxy.detection import detect_camera_type
 from pandaproxy.ftp_proxy import FTPProxy
+from pandaproxy.helper import generate_self_signed_cert
 from pandaproxy.mqtt_proxy import MQTTProxy
+from pandaproxy.protocol import CERT_FILENAME, KEY_FILENAME
 from pandaproxy.rtsp_proxy import RTSPProxy
 
 app = typer.Typer(
@@ -35,22 +38,11 @@ def check_dependencies(services: set[str], camera_type: str | None) -> tuple[boo
     missing = []
 
     # Camera service dependencies
-    if "camera" in services:
-        if camera_type == "rtsp":
-            if not shutil.which("ffmpeg"):
-                missing.append("ffmpeg")
-            if not shutil.which("mediamtx"):
-                missing.append("mediamtx")
-        elif camera_type == "chamber" and not shutil.which("openssl"):
-            missing.append("openssl")
-
-    # MQTT and FTP proxies need openssl for TLS cert generation
-    if (
-        ("mqtt" in services or "ftp" in services)
-        and not shutil.which("openssl")
-        and "openssl" not in missing
-    ):
-        missing.append("openssl")
+    if "camera" in services and camera_type == "rtsp":
+        if not shutil.which("ffmpeg"):
+            missing.append("ffmpeg")
+        if not shutil.which("mediamtx"):
+            missing.append("mediamtx")
 
     return len(missing) == 0, missing
 
@@ -77,6 +69,26 @@ def parse_services(services_str: str | None, enable_all: bool) -> set[str]:
     return services
 
 
+def is_running_in_docker() -> bool:
+    """Check if the application is running inside a Docker container."""
+    # Check for the existence of .dockerenv file
+    if os.path.exists("/.dockerenv"):
+        return True
+
+    # Check for RUNNING_IN_DOCKER environment variable (used in our Dockerfile)
+    if os.environ.get("RUNNING_IN_DOCKER"):
+        return True
+
+    # Check cgroup for "docker" string on Linux
+    try:
+        with open("/proc/1/cgroup") as f:
+            return "docker" in f.read()
+    except FileNotFoundError:
+        pass  # File doesn't exist, not a Linux-based container
+
+    return False
+
+
 async def run_proxy(
     printer_ip: str,
     access_code: str,
@@ -90,6 +102,7 @@ async def run_proxy(
     rtsp_proxy: RTSPProxy | None = None
     mqtt_proxy: MQTTProxy | None = None
     ftp_proxy: FTPProxy | None = None
+    background_tasks = []
 
     # Setup signal handlers for graceful shutdown
     stop_event = asyncio.Event()
@@ -104,41 +117,87 @@ async def run_proxy(
         loop.add_signal_handler(sig, signal_handler)
 
     try:
-        # Start camera proxy if enabled
+        # Generate shared TLS certificate
+        certs_dir = Path("certs")
+        certs_dir.mkdir(exist_ok=True)
+        cert_path = certs_dir / CERT_FILENAME
+        key_path = certs_dir / KEY_FILENAME
+
+        if not cert_path.exists() or not key_path.exists():
+            logger.info("Generating shared TLS certificate...")
+            san_ips = ["127.0.0.1", "::1"]
+            if bind != "0.0.0.0":
+                san_ips.append(bind)
+
+            generate_self_signed_cert(
+                common_name="PandaProxy",
+                san_dns=["localhost"],
+                san_ips=san_ips,
+                output_cert=cert_path,
+                output_key=key_path,
+            )
+
+        # Instantiate camera proxy if enabled
         if "camera" in services and camera_type:
             if camera_type == "chamber":
                 chamber_proxy = ChamberImageProxy(
                     printer_ip=printer_ip,
                     access_code=access_code,
+                    cert_path=cert_path,
+                    key_path=key_path,
                     bind_address=bind,
                 )
-                await chamber_proxy.start()
             elif camera_type == "rtsp":
                 rtsp_proxy = RTSPProxy(
                     printer_ip=printer_ip,
                     access_code=access_code,
+                    cert_path=cert_path,
+                    key_path=key_path,
                     bind_address=bind,
                 )
-                await rtsp_proxy.start()
 
-        # Start MQTT proxy if enabled
+        # Instantiate MQTT proxy if enabled
         if "mqtt" in services:
             mqtt_proxy = MQTTProxy(
                 printer_ip=printer_ip,
                 access_code=access_code,
                 serial_number=serial_number,
+                cert_path=cert_path,
+                key_path=key_path,
                 bind_address=bind,
             )
-            await mqtt_proxy.start()
 
-        # Start FTP proxy if enabled
+        # Instantiate FTP proxy if enabled
         if "ftp" in services:
             ftp_proxy = FTPProxy(
                 printer_ip=printer_ip,
                 access_code=access_code,
+                cert_path=cert_path,
+                key_path=key_path,
                 bind_address=bind,
             )
-            await ftp_proxy.start()
+
+        # Start all services concurrently
+        # Collect start coroutines from instantiated proxies
+        start_tasks = []
+        if chamber_proxy:
+            start_tasks.append(chamber_proxy.start())
+        if rtsp_proxy:
+            start_tasks.append(rtsp_proxy.start())
+        if mqtt_proxy:
+            start_tasks.append(mqtt_proxy.start())
+        if ftp_proxy:
+            start_tasks.append(ftp_proxy.start())
+
+        if start_tasks:
+            await asyncio.gather(*start_tasks)
+
+        # IMPORTANT: Background tasks must be created AFTER start() completes
+        # because they depend on _running being True (set in start())
+        if chamber_proxy:
+            background_tasks.append(asyncio.create_task(chamber_proxy.run_upstream_loop()))
+        if rtsp_proxy:
+            background_tasks.append(asyncio.create_task(rtsp_proxy.run_monitor_loop()))
 
         # Print startup banner
         typer.echo("\n" + "=" * 60)
@@ -162,7 +221,7 @@ async def run_proxy(
             typer.echo(f"  FTP: ftps://{bind}:990 (implicit TLS, active mode only)")
 
         typer.echo("=" * 60)
-        if not (os.path.exists("/.dockerenv") or os.environ.get("RUNNING_IN_DOCKER")):
+        if not is_running_in_docker():
             typer.echo("Press Ctrl+C to stop\n")
 
         # Wait for shutdown signal
@@ -171,17 +230,26 @@ async def run_proxy(
     finally:
         logger.info("Shutting down...")
 
+        # Cancel background tasks
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+
+        # Create a list of stop coroutines from the proxies that were started
+        stop_tasks = []
         if chamber_proxy:
-            await chamber_proxy.stop()
-
+            stop_tasks.append(chamber_proxy.stop())
         if rtsp_proxy:
-            await rtsp_proxy.stop()
-
+            stop_tasks.append(rtsp_proxy.stop())
         if mqtt_proxy:
-            await mqtt_proxy.stop()
-
+            stop_tasks.append(mqtt_proxy.stop())
         if ftp_proxy:
-            await ftp_proxy.stop()
+            stop_tasks.append(ftp_proxy.stop())
+
+        # Stop all services concurrently
+        if stop_tasks:
+            await asyncio.gather(*stop_tasks)
 
         logger.info("Shutdown complete")
 
@@ -255,22 +323,18 @@ def main(
     preventing connection limit issues. It can proxy camera streams, MQTT
     (for printer control/status), and FTP (for file uploads).
 
-    \b
     Services:
     - camera: Auto-detected (Chamber Image for A1/P1, RTSP for X1/H2/P2)
     - mqtt: MQTTS on port 8883 for printer control and status
     - ftp: Implicit FTPS on port 990 for file uploads
 
-    \b
     Examples:
         # Camera only (default)
         pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001
 
-    \b
         # All services
         pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 --enable-all
 
-    \b
         # Specific services
         pandaproxy -p 192.168.1.100 -a 12345678 -s 01P00A000000001 --services camera,mqtt
     """
@@ -313,10 +377,6 @@ def main(
                     "  - mediamtx: Download from https://github.com/bluenviron/mediamtx/releases",
                     err=True,
                 )
-            elif dep == "openssl":
-                typer.echo("  - openssl: Install via your package manager", err=True)
-                typer.echo("      Linux: apt install openssl / pacman -S openssl", err=True)
-                typer.echo("      macOS: brew install openssl", err=True)
         raise typer.Exit(1)
 
     if not enabled_services:

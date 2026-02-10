@@ -6,6 +6,8 @@ services:
     image: pandaproxy_dev:latest
     container_name: pandaproxy_dev
     env_file: .env
+    volumes:
+      - ./certs:/app/certs
     ports:
       # Chamber image stream (A1/P1 printers)
       - "6000:6000"

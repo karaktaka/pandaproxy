@@ -10,7 +10,10 @@ import contextlib
 import logging
 import os
 import shutil
+import tempfile
 from pathlib import Path
+
+import ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,9 @@ api: no
 rtsp: yes
 protocols: [tcp]
 rtspAddress: :{rtsp_port}
+rtspEncryption: "yes"
+rtspServerKey: "{server_key}"
+rtspServerCert: "{server_cert}"
 
 # Authentication for RTSP
 authMethod: internal
@@ -82,11 +88,15 @@ class RTSPProxy:
         self,
         printer_ip: str,
         access_code: str,
+        cert_path: Path,
+        key_path: Path,
         bind_address: str = "0.0.0.0",
         mediamtx_internal_port: int = 8554,
     ) -> None:
         self.printer_ip = printer_ip
         self.access_code = access_code
+        self.cert_path = cert_path
+        self.key_path = key_path
         self.bind_address = bind_address
         self.port = 322
         self.mediamtx_internal_port = mediamtx_internal_port
@@ -124,9 +134,6 @@ class RTSPProxy:
 
         # Start FFmpeg to pull from printer and push to MediaMTX
         await self._start_ffmpeg()
-
-        # Start monitoring task
-        self._monitor_task = asyncio.create_task(self._monitor_processes())
 
         logger.info("RTSP proxy running on rtsp://%s:%d/stream", self.bind_address, self.port)
 
@@ -168,15 +175,33 @@ class RTSPProxy:
 
         logger.info("RTSP proxy stopped")
 
+    async def run_monitor_loop(self) -> None:
+        """Run the process monitoring loop as a standalone coroutine."""
+        self._monitor_task = asyncio.create_task(self._monitor_processes())
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._monitor_task  # Expected on shutdown
+        logger.debug("Monitor task stopped.")
+
     async def _create_mediamtx_config(self) -> Path:
         """Create MediaMTX configuration file."""
+        if not self.cert_path.exists() or not self.key_path.exists():
+            raise FileNotFoundError(
+                f"TLS certificates not found at {self.cert_path} or {self.key_path}. "
+                "Please ensure the CLI entry point has generated them."
+            )
+
         config_content = MEDIAMTX_CONFIG_TEMPLATE.format(
             rtsp_port=self.port,
             access_code=self.access_code,
+            server_cert=str(self.cert_path.absolute()),
+            server_key=str(self.key_path.absolute()),
         )
 
         # Create temp config file
-        config_path = Path("/tmp/pandaproxy_mediamtx.yml")
+        fd, path = tempfile.mkstemp(prefix="pandaproxy_mediamtx_", suffix=".yml")
+        os.close(fd)
+        config_path = Path(path)
+
         config_path.write_text(config_content)
         logger.debug("Created MediaMTX config at %s", config_path)
 
@@ -204,32 +229,35 @@ class RTSPProxy:
         source_url = f"rtsps://bblp:{self.access_code}@{self.printer_ip}:322/streaming/live/1"
 
         # MediaMTX publish URL (internal, no auth needed for publisher)
-        publish_url = f"rtsp://bblp:{self.access_code}@127.0.0.1:{self.port}/stream"
+        publish_url = f"rtsps://bblp:{self.access_code}@127.0.0.1:{self.port}/stream"
 
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            # Input options
-            "-rtsp_transport",
-            "tcp",
-            "-allowed_media_types",
-            "video",  # Only video, skip audio
-            "-fflags",
-            "+genpts",
-            # Ignore SSL certificate verification (BambuLab uses self-signed)
-            "-i",
+        # Use ffmpeg-python to construct the command
+        # Note: ffmpeg-python is a wrapper that constructs the command line arguments
+        # We still execute it via asyncio.create_subprocess_exec to have async control
+        # and output capturing consistent with the rest of the application.
+
+        stream = ffmpeg.input(
             source_url,
-            # Output options - copy codec, no transcoding
-            "-c",
-            "copy",
-            "-f",
-            "rtsp",
-            "-rtsp_transport",
-            "tcp",
+            rtsp_transport="tcp",
+            allowed_media_types="video",
+            fflags="+genpts",
+            # Ignore cert verification for source
+            tls_verify=0,
+        )
+
+        stream = ffmpeg.output(
+            stream,
             publish_url,
-        ]
+            c="copy",
+            f="rtsp",
+            rtsp_transport="tcp",
+            # Ignore cert verification for destination (our self-signed cert)
+            tls_verify=0,
+        )
+
+        # Get the command arguments
+        # ffmpeg-python's compile() returns the full command list including 'ffmpeg'
+        cmd = ffmpeg.compile(stream)
 
         # Mask access code in log
         safe_cmd = " ".join(cmd).replace(self.access_code, "****")
