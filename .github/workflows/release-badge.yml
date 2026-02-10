@@ -26,7 +26,7 @@ jobs:
           sed -i "s/badge\/Version-.*-green/badge\/Version-${{ env.VERSION }}-green/" README.md
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "docs: Update release badge to version ${{ env.VERSION }}"
           title: "docs: Update release badge to version ${{ env.VERSION }}"
