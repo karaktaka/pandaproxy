@@ -176,11 +176,19 @@ class RTSPProxy:
         logger.info("RTSP proxy stopped")
 
     async def run_monitor_loop(self) -> None:
-        """Run the process monitoring loop as a standalone coroutine."""
-        self._monitor_task = asyncio.create_task(self._monitor_processes())
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._monitor_task  # Expected on shutdown
-        logger.debug("Monitor task stopped.")
+        """Run the process monitoring loop as a standalone coroutine.
+
+        This is the entry point called from cli.py as a background task.
+        It must never exit silently — any unexpected crash is logged.
+        """
+        self._monitor_task = asyncio.current_task()
+        try:
+            await self._monitor_processes()
+            logger.info("Monitor loop exited normally")
+        except asyncio.CancelledError:
+            logger.debug("Monitor loop cancelled")
+        except Exception:
+            logger.exception("Monitor loop crashed unexpectedly")
 
     async def _create_mediamtx_config(self) -> Path:
         """Create MediaMTX configuration file."""
@@ -301,22 +309,27 @@ class RTSPProxy:
         while self._running:
             await asyncio.sleep(5)
 
-            # Check MediaMTX
-            if self._mediamtx_process and self._mediamtx_process.returncode is not None:
-                logger.warning(
-                    "MediaMTX process exited with code %d", self._mediamtx_process.returncode
-                )
-                if self._running:
-                    logger.info("Restarting MediaMTX...")
-                    await self._start_mediamtx()
-                    await asyncio.sleep(2)
+            try:
+                # Check MediaMTX
+                if self._mediamtx_process and self._mediamtx_process.returncode is not None:
+                    logger.warning(
+                        "MediaMTX process exited with code %d", self._mediamtx_process.returncode
+                    )
+                    if self._running:
+                        logger.info("Restarting MediaMTX...")
+                        await self._start_mediamtx()
+                        await asyncio.sleep(2)
 
-            # Check FFmpeg
-            if self._ffmpeg_process and self._ffmpeg_process.returncode is not None:
-                logger.warning(
-                    "FFmpeg process exited with code %d", self._ffmpeg_process.returncode
-                )
-                if self._running:
-                    logger.info("Restarting FFmpeg in 5 seconds...")
-                    await asyncio.sleep(5)
-                    await self._start_ffmpeg()
+                # Check FFmpeg
+                if self._ffmpeg_process and self._ffmpeg_process.returncode is not None:
+                    logger.warning(
+                        "FFmpeg process exited with code %d", self._ffmpeg_process.returncode
+                    )
+                    if self._running:
+                        logger.info("Restarting FFmpeg in 5 seconds...")
+                        await asyncio.sleep(5)
+                        await self._start_ffmpeg()
+            except asyncio.CancelledError:
+                raise  # Let cancellation propagate for clean shutdown
+            except Exception as e:
+                logger.error("Error during process restart: %s", e)
