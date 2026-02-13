@@ -1,7 +1,6 @@
 """Shared helper utilities for PandaProxy."""
 
 import asyncio
-import contextlib
 import datetime
 import ipaddress
 import os
@@ -169,8 +168,23 @@ def generate_self_signed_cert(
     return cert_path, key_path
 
 
-async def close_writer(writer: asyncio.StreamWriter) -> None:
-    """Safely close an asyncio StreamWriter."""
+async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> None:
+    """Safely close an asyncio StreamWriter with timeout.
+
+    If the graceful close times out (common with SSL), aborts the transport
+    to force immediate closure.
+
+    Args:
+        writer: The StreamWriter to close
+        timeout: Maximum seconds to wait for close to complete (default 2s)
+    """
     writer.close()
-    with contextlib.suppress(Exception):
-        await writer.wait_closed()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+    except TimeoutError:
+        # SSL shutdown hanging - abort to force close
+        transport = writer.transport
+        if transport:
+            transport.abort()
+    except Exception:
+        pass  # Ignore other errors during close

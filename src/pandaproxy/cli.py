@@ -323,6 +323,7 @@ def main(
             "--verbose",
             "-v",
             help="Enable verbose/debug logging",
+            envvar="DEBUG",
         ),
     ] = False,
     _version: Annotated[

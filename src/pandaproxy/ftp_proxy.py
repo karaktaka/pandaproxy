@@ -170,6 +170,9 @@ class FTPProxy:
         upstream_writer: asyncio.StreamWriter | None = None
         upstream_reader: asyncio.StreamReader | None = None
         data_servers: list[asyncio.Server] = []
+        active_data_transfers = 0
+        data_transfer_done = asyncio.Event()
+        data_transfer_done.set()  # Initially no transfers, so "done"
 
         try:
             logger.debug("Connecting to printer FTP at %s:%d", self.printer_ip, self.port)
@@ -179,9 +182,13 @@ class FTPProxy:
             )
             logger.debug("Connected to printer FTP")
 
-            # Extract SSL session for reuse
+            # Extract SSL session for reuse (required by BambuLab printers)
             control_ssl_obj = upstream_writer.get_extra_info("ssl_object")
             control_session = control_ssl_obj.session if control_ssl_obj else None
+            if control_session:
+                logger.debug("SSL session extracted for data channel reuse")
+            else:
+                logger.warning("No SSL session available - data connections may fail")
 
             # --- Data Connection Helper ---
             async def handle_data_connection(
@@ -191,48 +198,156 @@ class FTPProxy:
                 w: asyncio.StreamWriter,
             ) -> None:
                 """Handle a data connection for a specific PASV request."""
+                nonlocal active_data_transfers
                 peer = w.get_extra_info("peername")
-                logger.debug("Data conn %s -> %s:%d", peer, target_ip, target_port)
+                logger.debug("Data connection from %s -> %s:%d", peer, target_ip, target_port)
+
+                # Track active transfers for QUIT handling
+                active_data_transfers += 1
+                data_transfer_done.clear()
 
                 target_w: asyncio.StreamWriter | None = None
                 try:
                     # Prepare SSL context for data connection
-                    # If we have a control session, try to reuse it
+                    # BambuLab printers require TLS session reuse from control channel
                     ctx = self._ssl_context
                     token = None
                     if control_session:
                         token = ssl_session_context.set(control_session)
-                        logger.debug("Using session reuse for data connection")
+                        logger.debug("Attempting TLS session reuse for data connection")
+                    else:
+                        logger.warning("No session to reuse - printer may reject connection")
 
                     try:
                         target_r, target_w = await asyncio.open_connection(
                             target_ip, target_port, ssl=ctx
                         )
-                        logger.debug("Connected to printer data port")
+                        # Verify session was actually reused
+                        data_ssl_obj = target_w.get_extra_info("ssl_object")
+                        if data_ssl_obj and data_ssl_obj.session_reused:
+                            logger.debug("TLS session reuse successful")
+                        else:
+                            logger.warning("TLS session was NOT reused - transfer may fail")
+                        logger.debug("Connected to printer data port %s:%d", target_ip, target_port)
                     finally:
                         if token:
                             ssl_session_context.reset(token)
 
-                    async def fwd(src, dst):
-                        with contextlib.suppress(Exception):
+                    async def fwd(src, dst, direction: str):
+                        """Forward data from src to dst with proper error handling."""
+                        bytes_transferred = 0
+                        try:
                             while True:
-                                data = await src.read(65536)
+                                try:
+                                    data = await src.read(65536)
+                                except Exception as read_err:
+                                    logger.error(
+                                        "Read error on %s after %d bytes: %s",
+                                        direction,
+                                        bytes_transferred,
+                                        read_err,
+                                    )
+                                    raise
                                 if not data:
+                                    logger.debug(
+                                        "EOF detected on %s after %d bytes",
+                                        direction,
+                                        bytes_transferred,
+                                    )
                                     break
-                                dst.write(data)
-                                await dst.drain()
+                                try:
+                                    dst.write(data)
+                                    await dst.drain()
+                                except Exception as write_err:
+                                    logger.error(
+                                        "Write error on %s after %d bytes: %s",
+                                        direction,
+                                        bytes_transferred,
+                                        write_err,
+                                    )
+                                    raise
+                                bytes_transferred += len(data)
+                        except asyncio.CancelledError:
+                            logger.debug(
+                                "Forwarding %s cancelled after %d bytes",
+                                direction,
+                                bytes_transferred,
+                            )
+                            raise
+                        except Exception as e:
+                            logger.error(
+                                "Forwarding %s failed after %d bytes: %s",
+                                direction,
+                                bytes_transferred,
+                                e,
+                            )
+                            raise
+                        finally:
+                            logger.debug(
+                                "Forwarding %s complete: %d bytes", direction, bytes_transferred
+                            )
 
-                    t1 = asyncio.create_task(fwd(r, target_w))
-                    t2 = asyncio.create_task(fwd(target_r, w))
-                    await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-                    t1.cancel()
-                    t2.cancel()
+                    t1 = asyncio.create_task(fwd(r, target_w, "client->printer"))
+                    t2 = asyncio.create_task(fwd(target_r, w, "printer->client"))
+
+                    # Wait for either direction to complete (FTP data is unidirectional)
+                    done, pending = await asyncio.wait(
+                        [t1, t2], return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    # Check for exceptions in completed task
+                    for task in done:
+                        exc = task.exception()
+                        if exc:
+                            logger.error("Data transfer failed: %s", exc)
+
+                    # Signal end-of-stream by closing the write side
+                    # For SSL sockets, write_eof() doesn't work - we must close
+                    # For uploads: client finished -> close upstream to signal printer
+                    # For downloads: printer finished -> close downstream to signal client
+                    if t1 in done and not t1.exception():
+                        # Client finished sending (upload) - close upstream connection
+                        logger.debug("Upload complete, flushing and closing upstream connection")
+                        try:
+                            # Ensure all buffered data is sent before close
+                            await target_w.drain()
+                            logger.debug("Drain complete, closing connection")
+                            target_w.close()
+                            # Use timeout to avoid blocking if SSL shutdown hangs
+                            try:
+                                await asyncio.wait_for(target_w.wait_closed(), timeout=2.0)
+                                logger.debug("Upstream connection closed successfully")
+                            except TimeoutError:
+                                # SSL shutdown is hanging - abort the transport to force EOF
+                                logger.debug("wait_closed timed out, aborting transport")
+                                transport = target_w.transport
+                                if transport:
+                                    transport.abort()
+                        except Exception as e:
+                            logger.debug("Error closing upstream: %s", e)
+                        target_w = None  # Prevent double-close in finally
+                    if t2 in done and not t2.exception():
+                        # Printer finished sending (download) - close downstream connection
+                        logger.debug("Download complete, closing downstream connection")
+                        await close_writer(w)
+
+                    # Cancel the other direction (it was idle for this transfer type)
+                    for task in pending:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+
                 except Exception as exc:
                     logger.error("Data proxy error: %s", exc)
                 finally:
                     await close_writer(w)
                     if target_w:
                         await close_writer(target_w)
+                    logger.debug("Data connection closed")
+                    # Signal that this transfer is done
+                    active_data_transfers -= 1
+                    if active_data_transfers == 0:
+                        data_transfer_done.set()
 
             # --- Forwarding Logic ---
 
@@ -260,6 +375,16 @@ class FTPProxy:
                                 client_writer.write(b"502 Command not implemented\r\n")
                                 await client_writer.drain()
                                 continue
+
+                            # Delay QUIT until data transfers complete
+                            # Some clients (Bambuddy) send QUIT during active transfers
+                            if cmd_str.upper() == "QUIT" and active_data_transfers > 0:
+                                logger.debug(
+                                    "Delaying QUIT until %d data transfer(s) complete",
+                                    active_data_transfers,
+                                )
+                                await data_transfer_done.wait()
+                                logger.debug("Data transfers complete, forwarding QUIT")
 
                         upstream_writer.write(line)
                         await upstream_writer.drain()
