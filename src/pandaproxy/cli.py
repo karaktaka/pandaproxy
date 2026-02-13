@@ -204,6 +204,8 @@ async def run_proxy(
             background_tasks.append(asyncio.create_task(chamber_proxy.run_upstream_loop()))
         if rtsp_proxy:
             background_tasks.append(asyncio.create_task(rtsp_proxy.run_monitor_loop()))
+        if mqtt_proxy:
+            background_tasks.append(asyncio.create_task(mqtt_proxy.run_upstream_loop()))
 
         # Print startup banner
         typer.echo("\n" + "=" * 60)
