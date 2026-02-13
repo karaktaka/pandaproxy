@@ -89,7 +89,32 @@ GitHub Actions workflows:
 
 - **`docker.yml`**: Build & push multi-arch images on push to `main` or tags
 - **`docker-pr.yml`**: Validate Docker builds on PRs
+- **`docker-pr-build.yml`**: Build & push PR images on `/build-pr` comment (maintainer-only)
 - **`lint.yml`**: Run ruff checks
+
+### Testing GitHub Actions Locally
+
+Use these tools to validate workflows before pushing:
+
+```bash
+# Syntax validation (fast, catches most errors)
+actionlint .github/workflows/<workflow>.yml
+
+# Dry-run workflow execution with mock event
+act <event> -e <event.json> -n -W .github/workflows/<workflow>.yml
+
+# List jobs that would run
+act <event> -e <event.json> -l -W .github/workflows/<workflow>.yml
+```
+
+**Tools:**
+- **`actionlint`**: Validates YAML syntax, action references, expressions, and shellcheck integration
+- **`act`**: Simulates workflow execution using Docker; useful for testing job dependencies and `if` conditions
+
+**Tips:**
+- Empty output from `act -n` means the job's `if` condition filtered it out
+- For Apple Silicon: add `--container-architecture linux/amd64` to `act` commands
+- Create mock event payloads in `/tmp/` for testing different trigger scenarios
 
 ## Docker
 
