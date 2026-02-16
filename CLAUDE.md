@@ -50,11 +50,13 @@ src/pandaproxy/
 ├── chamber_proxy.py    # Chamber camera proxy (port 6000)
 ├── rtsp_proxy.py       # RTSP proxy (port 322)
 ├── mqtt_proxy.py       # MQTT proxy (port 8883)
+├── mqtt_protocol.py    # Minimal MQTT wire protocol (client-facing packet parsing/building)
 ├── ftp_proxy.py        # FTP proxy (port 990)
 ├── detection.py        # Camera type auto-detection
 ├── fanout.py           # Stream fan-out logic
 ├── protocol.py         # Shared SSL/auth utilities
-└── helper.py           # Common helper functions
+├── helper.py           # Common helper functions
+└── printer.cer         # TLS certificate for printer connections
 ```
 
 ## Coding Conventions
