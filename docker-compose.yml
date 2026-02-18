@@ -1,6 +1,6 @@
 services:
   pandaproxy:
-    image: ghcr.io/karaktaka/pandaproxy:latest
+    image: ghcr.io/nerdycraft/pandaproxy:latest
     container_name: pandaproxy
     restart: unless-stopped
     env_file: .env
