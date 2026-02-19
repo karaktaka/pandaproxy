@@ -34,7 +34,7 @@ jobs:
     steps:
       - name: Get PR details
         id: pr
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const pr = await github.rest.pulls.get({
@@ -49,7 +49,7 @@ jobs:
 
       - name: Check commenter permissions
         id: auth
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
@@ -71,7 +71,7 @@ jobs:
         # The reaction is just visual feedback, not critical to the workflow
         continue-on-error: true
         if: steps.auth.outputs.authorized == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -158,7 +158,7 @@ jobs:
           echo "✅ Version verified in pushed image"
 
       - name: Comment on PR with image info
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const image = `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-${{ needs.check-trigger.outputs.pr_number }}`;
