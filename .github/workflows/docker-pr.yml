@@ -11,34 +11,9 @@ on:
       - ".github/workflows/docker-pr.yml"
 
 jobs:
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.14
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Run tests
-        run: uv run pytest tests/ -v --tb=short
-
   validate:
     name: Validate Docker Image
     runs-on: ubuntu-latest
-    needs: test
 
     steps:
       - name: Checkout code

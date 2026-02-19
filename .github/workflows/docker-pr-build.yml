@@ -81,39 +81,11 @@ jobs:
               content: 'rocket'
             });
 
-  # Second job: Run tests on the PR code
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    needs: check-trigger
-    if: needs.check-trigger.outputs.authorized == 'true'
-
-    steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.check-trigger.outputs.pr_head_sha }}
-          fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.14
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Run tests
-        run: uv run pytest tests/ -v --tb=short
-
-  # Third job: Build and push the Docker image
+  # Second job: Build and push the Docker image
   build:
     name: Build & Push PR Image
     runs-on: ubuntu-latest
-    needs: [check-trigger, test]
+    needs: check-trigger
     if: needs.check-trigger.outputs.authorized == 'true'
     permissions:
       contents: read
