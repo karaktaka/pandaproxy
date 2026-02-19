@@ -2,8 +2,8 @@
 
 BambuLab Multi-Service Proxy - Proxy camera, MQTT, and FTP from BambuLab printers to multiple clients.
 
-[![Release](https://img.shields.io/badge/Version-0.0.3-green?style=for-the-badge)](https://github.com/karaktaka/pandaproxy/releases)
-![AI-Powered](https://img.shields.io/badge/Developed%20with-AI-blue?style=for-the-badge&logo=google-gemini&logoColor=white)
+[![Release](https://img.shields.io/badge/Version-0.0.3-green?style=for-the-badge)](https://github.com/nerdycraft/pandaproxy/releases)
+![AI-Powered](https://img.shields.io/badge/Developed%20with-AI-blue?style=for-the-badge&logo=claude&logoColor=white)
 
 > **⚠️ Alpha Software** - This project is heavily under development and very much in an alpha state. Expect bugs, breaking changes, and incomplete features.
 
@@ -70,7 +70,7 @@ These services have limited simultaneous connection support. PandaProxy acts as 
 
 ```bash
 # Clone the repository
-git clone https://github.com/karaktaka/pandaproxy.git
+git clone https://github.com/nerdycraft/pandaproxy.git
 cd pandaproxy
 
 # Install with uv
