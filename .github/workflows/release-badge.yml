@@ -11,6 +11,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      pr-number: ${{ steps.create-pr.outputs.pull-request-number }}
+      pr-sha: ${{ steps.create-pr.outputs.pull-request-head-sha }}
+      pr-branch: docs/update-badge-${{ env.VERSION }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -26,6 +30,7 @@ jobs:
           sed -i "s/badge\/Version-.*-green/badge\/Version-${{ env.VERSION }}-green/" README.md
 
       - name: Create Pull Request
+        id: create-pr
         uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "docs: Update release badge to version ${{ env.VERSION }}"
@@ -37,3 +42,63 @@ jobs:
           branch: docs/update-badge-${{ env.VERSION }}
           delete-branch: true
           labels: documentation,automated
+
+  # PRs created by GITHUB_TOKEN don't trigger pull_request workflows, so the
+  # required status checks (lint, tests) never run. We execute them here and
+  # report check-runs against the PR's head SHA via the Checks API.
+  pr-checks:
+    name: PR Status Checks
+    needs: update-badge
+    if: needs.update-badge.outputs.pr-number
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.update-badge.outputs.pr-branch }}
+          fetch-depth: 0
+
+      - name: Run Ruff linter
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: "check --output-format=github"
+
+      - name: Run Ruff formatter check
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: "format --check --diff"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+
+      - name: Report check runs on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = '${{ needs.update-badge.outputs.pr-sha }}';
+            const conclusion = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            for (const name of ['Ruff Lint & Format Check', 'Run Tests']) {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name,
+                head_sha: sha,
+                status: 'completed',
+                conclusion,
+              });
+            }
