@@ -186,9 +186,13 @@ class MQTTProxy:
                     identifier=f"pandaproxy-{self.serial_number}",
                 ) as client:
                     self._upstream_client = client
-                    await client.subscribe("#")
+                    report_topic = f"device/{self.serial_number}/report"
+                    await client.subscribe(report_topic)
                     self._upstream_connected.set()
-                    logger.info("Connected to printer MQTT broker")
+                    logger.info(
+                        "Connected to printer MQTT broker (subscribed to %s)",
+                        report_topic,
+                    )
 
                     async for message in client.messages:
                         logger.debug(
