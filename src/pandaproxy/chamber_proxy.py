@@ -96,11 +96,19 @@ class ChamberImageProxy:
             await self._server.wait_closed()
 
     async def run_upstream_loop(self) -> None:
-        """Run the upstream connection loop as a standalone coroutine."""
-        self._upstream_task = asyncio.create_task(self._upstream_connection_loop())
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._upstream_task
-        logger.debug("Upstream task stopped.")
+        """Run the upstream connection loop as a standalone coroutine.
+
+        This is the entry point called from cli.py as a background task.
+        It must never exit silently — any unexpected crash is logged and retried.
+        """
+        self._upstream_task = asyncio.current_task()
+        try:
+            await self._upstream_connection_loop()
+            logger.info("Upstream loop exited normally")
+        except asyncio.CancelledError:
+            logger.debug("Upstream loop cancelled")
+        except Exception:
+            logger.exception("Upstream loop crashed unexpectedly")
 
     async def _upstream_connection_loop(self) -> None:
         """Maintain connection to printer chamber image stream, reconnecting on failure."""
@@ -154,6 +162,9 @@ class ChamberImageProxy:
                     # Broadcast header + jpeg to all clients (same format as printer sends)
                     await self._fanout.broadcast([header, jpeg_data])
 
+            except asyncio.CancelledError:
+                logger.debug("Upstream connection cancelled")
+                raise  # Let CancelledError propagate for clean shutdown
             except TimeoutError:
                 logger.warning("Upstream connection timeout")
             except asyncio.IncompleteReadError as e:
@@ -162,8 +173,12 @@ class ChamberImageProxy:
                 )
             except ConnectionRefusedError:
                 logger.error("Connection refused by printer")
+            except ssl.SSLError as e:
+                logger.warning("Upstream SSL error: %s", e)
+            except OSError as e:
+                logger.warning("Upstream connection failed: %s", e)
             except Exception as e:
-                logger.error("Upstream connection error: %s", e)
+                logger.error("Unexpected upstream error: %s: %s", type(e).__name__, e)
             finally:
                 self._upstream_connected.clear()
                 self._fanout.stop()
