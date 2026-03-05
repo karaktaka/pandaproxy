@@ -10,6 +10,9 @@ on:
       - "src/**"
       - ".github/workflows/docker-pr.yml"
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate Docker Image
