@@ -87,7 +87,7 @@ jobs:
 
       - name: Report check runs on PR
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = '${{ needs.update-badge.outputs.pr-sha }}';
