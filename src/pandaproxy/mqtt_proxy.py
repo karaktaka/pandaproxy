@@ -194,7 +194,6 @@ class MQTTProxy:
                         packet = build_publish(
                             str(message.topic),
                             message.payload if isinstance(message.payload, bytes) else b"",
-                            qos=message.qos,
                         )
                         await self._broadcast_to_clients(packet)
 
