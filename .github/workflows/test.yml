@@ -32,6 +32,6 @@ jobs:
         run: uv run pytest tests/ -v --tb=short --cov=pandaproxy --cov-report=xml
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
