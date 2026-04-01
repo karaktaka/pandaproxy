@@ -1,3 +1,6 @@
+> **Note:** This project has moved to [Codeberg](https://codeberg.org/nerdycraft/pandaproxy).
+> This GitHub repository is no longer actively maintained.
+
 # PandaProxy
 
 BambuLab Multi-Service Proxy - Proxy camera, MQTT, and FTP from BambuLab printers to multiple clients.
